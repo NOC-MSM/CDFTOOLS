@@ -106,7 +106,7 @@ Example:
  * When relevant, the switch `-vvl` indicates that the vertical metrics is time-varying. Therefore, CDFTOOLS assume that the vertical metrics is saved in the same file than the data.
 
 #### Support for CMIP6 naming convention
- * When the code is compiled with CPP key key_CMIP6 set, the default variable names are taken form modcdfnames_CMIP6.h90 instead of the standard DRAKKAR names.
+ * When the code is compiled with CPP key key_CMIP6 set, the default variable names are taken from modcdfnames_CMIP6.h90 instead of the standard DRAKKAR names.
 
 #### Simplification
  * The codes have been cleaned for obsolescences. Coding rules were reinforced.

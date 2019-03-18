@@ -32,8 +32,9 @@ PROGRAM cdf_xtract_brokenline
   !! @class transport
   !!----------------------------------------------------------------------
   IMPLICIT NONE
-
+  INTEGER(KIND=4), PARAMETER :: jp_xtra = 20          ! max number of extra fields
   INTEGER(KIND=4) :: jsec, jleg, jt, jk,  jipt, jvar ! dummy loop index
+  INTEGER(KIND=4) :: jf                              !   "    "     "
   INTEGER(KIND=4) :: it                              ! time index for vvl
   INTEGER(KIND=4) :: narg, iargc, ijarg              ! command line
   INTEGER(KIND=4) :: numin=10                        ! logical unit for input section file
@@ -41,7 +42,9 @@ PROGRAM cdf_xtract_brokenline
   INTEGER(KIND=4) :: npiglo, npjglo, npk, npt        ! size of the domain
   INTEGER(KIND=4) :: iimin, iimax, ijmin, ijmax      ! ending points of a leg in model I J
   INTEGER(KIND=4) :: ii, ij, ii1, ij1, ipoint        ! working integer
+  INTEGER(KIND=4) :: idum                            ! working integer
   INTEGER(KIND=4) :: ierr                            ! Netcdf error and ncid
+  INTEGER(KIND=4) :: nxtra = 0                       ! number of xtra variables to extract
   INTEGER(KIND=4) :: nvar = 18                       ! number of output variables (modified after if options)
   INTEGER(KIND=4) :: np_tem, np_sal, np_una, np_vna  ! index for output variable
   INTEGER(KIND=4) :: np_isec, np_jsec, np_e2vn       !  "
@@ -53,6 +56,7 @@ PROGRAM cdf_xtract_brokenline
   INTEGER(KIND=4) :: np_icethick, np_icefra          !  "
   INTEGER(KIND=4), DIMENSION(:), ALLOCATABLE :: ncout                     ! Netcdf error and ncid
   INTEGER(KIND=4), DIMENSION(:), ALLOCATABLE :: ipk, id_varout  ! netcdf output stuff
+  INTEGER(KIND=4), DIMENSION(jp_xtra)        :: np_xtra, npkt
 
   ! broken line definition
   INTEGER(KIND=4) :: nfiles = 1                     ! number of sections
@@ -70,7 +74,9 @@ PROGRAM cdf_xtract_brokenline
   INTEGER(KIND=4), DIMENSION(:,:,:), ALLOCATABLE :: iilegs, ijlegs   ! F-index of points on the broken line per leg
 
   REAL(KIND=4)                              :: ztmp
+  REAL(KIND=4)                              :: zspvalt, zspvals, zspvalu, zspvalv
   REAL(KIND=4)                              :: xmin, xmax, ymin, ymax !
+  REAL(KIND=4), DIMENSION(jp_xtra)          :: zspvalxtra
   REAL(KIND=4), DIMENSION(:),   ALLOCATABLE :: gdept               ! Model deptht levels
   REAL(KIND=4), DIMENSION(:,:), ALLOCATABLE :: rxx, ryy            ! leg i j index of F points
   REAL(KIND=4), DIMENSION(:,:), ALLOCATABLE :: rlonsta, rlatsta    ! Geographic position defining legs
@@ -84,11 +90,12 @@ PROGRAM cdf_xtract_brokenline
   REAL(KIND=4), DIMENSION(:,:), ALLOCATABLE :: rlonu, rlatu        ! model long and lat of U points
   REAL(KIND=4), DIMENSION(:,:), ALLOCATABLE :: rlonv, rlatv        ! model long and lat of U points
   REAL(KIND=4), DIMENSION(:,:), ALLOCATABLE :: rlonf, rlatf        ! model long and lat of F points
-  REAL(KIND=4), DIMENSION(:,:), ALLOCATABLE :: temper, saline      ! model Temperature and salinity
+  REAL(KIND=4), DIMENSION(:,:), ALLOCATABLE :: temper, saline      ! model extra field
   REAL(KIND=4), DIMENSION(:,:), ALLOCATABLE :: uzonal, vmerid      ! model zonal and meridional velocity
   REAL(KIND=4), DIMENSION(:,:), ALLOCATABLE :: ssh, rmld           ! model SSH and MLD
   REAL(KIND=4), DIMENSION(:,:), ALLOCATABLE :: ricethick, ricefra  ! ice thickness and fraction
   REAL(KIND=4), DIMENSION(:,:), ALLOCATABLE :: zvmod               ! ice thickness and fraction
+  REAL(KIND=4), DIMENSION(:,:,:), ALLOCATABLE :: vextra              ! model Temperature and salinity
   ! along section array (dimension x,z or x,1 )
   REAL(KIND=4), DIMENSION(:,:),   ALLOCATABLE :: tempersec, salinesec, uzonalsec, vmeridsec
   REAL(KIND=4), DIMENSION(:,:),   ALLOCATABLE :: sshsec, rmldsec
@@ -99,6 +106,7 @@ PROGRAM cdf_xtract_brokenline
   REAL(KIND=4), DIMENSION(:,:),   ALLOCATABLE :: batsec
   REAL(KIND=4), DIMENSION(:,:),   ALLOCATABLE :: vmasksec
   REAL(KIND=4), DIMENSION(:,:,:), ALLOCATABLE :: e1vsec, e2usec  ! 3rd dimension for sections
+  REAL(KIND=4), DIMENSION(:,:,:), ALLOCATABLE :: vextrasec       ! model Temperature and salinity
 
   REAL(KIND=8)                              :: dtmp    ! temporary cumulating variable
   REAL(KIND=8)                              :: dl_xmin, dl_xmax, dl_ymin, dl_ymax !
@@ -106,6 +114,8 @@ PROGRAM cdf_xtract_brokenline
   REAL(KIND=8), DIMENSION(:), ALLOCATABLE   :: dbarot  ! for barotropic transport computation
 
   CHARACTER(LEN=255) :: cf_tfil , cf_ufil, cf_vfil   ! input T U V files
+  CHARACTER(LEN=255) :: cf_sfil                      ! input S-file if necessary
+  CHARACTER(LEN=255) :: cf_sshfil                    ! input SSH file (option)
   CHARACTER(LEN=255) :: cf_wfil                      ! input W file (vvl case)
   CHARACTER(LEN=255) :: cf_bath                      ! bathy file 
   CHARACTER(LEN=255) :: cf_ifil                      ! input ice file
@@ -121,6 +131,7 @@ PROGRAM cdf_xtract_brokenline
   CHARACTER(LEN=255) :: cldum                        ! can handle a long list of section files ...
   CHARACTER(LEN=255), DIMENSION(:), ALLOCATABLE :: cf_lst    ! input section file dim: nfiles
   CHARACTER(LEN=255), DIMENSION(:), ALLOCATABLE :: csection  ! section name
+  CHARACTER(LEN=255), DIMENSION(jp_xtra)        :: cf_xtra, cv_xtra, cl_point, cu_xtra, cln_xtra, csn_xtra
 
   LOGICAL  :: lchk                                  ! flag for missing files
   LOGICAL  :: lverbose = .FALSE.                    ! flag for verbosity
@@ -148,9 +159,10 @@ PROGRAM cdf_xtract_brokenline
   narg = iargc()
   IF ( narg == 0 ) THEN
      PRINT *,' usage :  cdf_xtrac_brokenline -t T-file -u U-file -v V-file [-i ICE-file] ...'
-     PRINT *,'         ... [-b BAT-file] [-mxl MXL-file] [-f section_filei,sec_file2,..] ...'
-     PRINT *,'         ... [-l LST-sections] [-ssh] [-mld] [-vt] [-vecrot] [-vvl W-file] ...'
-     PRINT *,'         ... [-o ROOT_name] [-ice] [-verbose]'
+     PRINT *,'        ... [-b BAT-file] [-mxl MXL-file] [-f section_filei,sec_file2,..] ...'
+     PRINT *,'        ... [-l LST-sections] [-ssh] [-mld] [-vt] [-vecrot] [-vvl W-file] ...'
+     PRINT *,'        ... [--ssh-file SSH-file] [-s S-file ] [-o ROOT_name] [-ice] ...'
+     PRINT *,'        ... [-xtra VAR-file VAR-name ] [-verbose]'
      PRINT *,'      '
      PRINT *,'     PURPOSE :'
      PRINT *,'      This tool extracts model variables from model files for a geographical' 
@@ -181,7 +193,8 @@ PROGRAM cdf_xtract_brokenline
      PRINT *,'      should be very small.'
      PRINT *,'      ' 
      PRINT *,'     ARGUMENTS :'
-     PRINT *,'       -t T-file :  model gridT file '
+     PRINT *,'       -t T-file :  model gridT file. If salinity is not in T-file, '
+     PRINT *,'                    use -s option'
      PRINT *,'       -u U-file :  model gridU file '
      PRINT *,'       -v V-file :  model gridV file '
      PRINT *,'      ' 
@@ -199,10 +212,12 @@ PROGRAM cdf_xtract_brokenline
      PRINT *,'              files for section definition. This option will be deprecated in'
      PRINT *,'              favor of ''-l'' option, which passes the same file names, but'
      PRINT *,'              easier to parse when using a big number of files.'
+     PRINT *,'      [-s S-file] : Specify a salinity file if salinity not in T-file.'
      PRINT *,'      [-b BAT-file] : Specify a bathymetric file in case the ocean bathymetry'
      PRINT *,'              is not in ',TRIM(cn_fzgr),' (variable ',TRIM(cn_hdepw),').'
      PRINT *,'      [-mxl MXL-file] : Give the name of the file containing the MLD if it is'
      PRINT *,'              not in T-file.'
+     PRINT *,'      [--ssh-file SSH-file] : specify the ssh file if not in T-file.' 
      PRINT *,'      [-verbose] : increase verbosity  ' 
      PRINT *,'      [-ssh]     : also save ssh along the broken line.'
      PRINT *,'      [-mld]     : also save mld along the broken line.'
@@ -217,6 +232,12 @@ PROGRAM cdf_xtract_brokenline
      PRINT *,'             such as ''_'' at the end of the ROOT_name.'
      PRINT *,'      [-vecrot] : also save normal and tangent velocities along the broken line'
      PRINT *,'             (for plots purpose only).'
+     PRINT *,'      [-xtra VAR-file VAR-name ] : This option specify information for'
+     PRINT *,'             extraction of extra data: (i) The name of the VAR-file, (ii) the'
+     PRINT *,'             name of the variable VAR-name in VAR-file.  Variable is assumed'
+     PRINT *,'             to be on Cgrid T-point. (Release of this condition will be coded'
+     PRINT *,'             in a latter version.'
+     PRINT *,'             This option can be repeated many time for different files.'
      PRINT *,'     '
      PRINT *,'     REQUIRED FILES :'
      PRINT *,'       ', TRIM(cn_fhgr),' and ',TRIM(cn_fzgr),' in the current directory ' 
@@ -239,6 +260,8 @@ PROGRAM cdf_xtract_brokenline
   ! Parse command line
   cf_bath='none'
   cf_mfil='none'
+  cf_sfil='none'
+  cf_sshfil='none'
   ijarg = 1 
   DO WHILE ( ijarg <= narg ) 
      CALL getarg(ijarg, cldum) ; ijarg = ijarg + 1
@@ -247,6 +270,8 @@ PROGRAM cdf_xtract_brokenline
      CASE ( '-u'       ) ; CALL getarg(ijarg, cf_ufil ) ; ijarg=ijarg+1
      CASE ( '-v'       ) ; CALL getarg(ijarg, cf_vfil ) ; ijarg=ijarg+1
         ! options
+     CASE ( '-s'       ) ; CALL getarg(ijarg, cf_sfil ) ; ijarg=ijarg+1
+     CASE ('--ssh-file') ; CALL getarg(ijarg, cf_sshfil); ijarg=ijarg+1
      CASE ( '-i'       ) ; CALL getarg(ijarg, cf_ifil ) ; ijarg=ijarg+1 ; lice = .TRUE. ;  nvar=nvar+2
      CASE ( '-o '      ) ; CALL getarg(ijarg, cf_root ) ; ijarg=ijarg+1
      CASE ( '-b '      ) ; CALL getarg(ijarg, cf_bath ) ; ijarg=ijarg+1
@@ -260,6 +285,11 @@ PROGRAM cdf_xtract_brokenline
      CASE ( '-vecrot'  ) ; lvecrot =.TRUE.  ; nvar = nvar + 2  !
      CASE ( '-f'       ) ; CALL getarg(ijarg, cldum  ) ; ijarg = ijarg + 1 ; lsecfile=.TRUE.
         ;                  CALL ParseFiles(cldum)  ! many section files can be given separated with comma
+     CASE ( '-xtra'    ) ; nxtra = nxtra + 1  
+        ;                  CALL getarg(ijarg, cf_xtra(nxtra) ) ; ijarg=ijarg+1
+        ;                  CALL getarg(ijarg, cv_xtra(nxtra) ) ; ijarg=ijarg+1
+!       ;                  CALL getarg(ijarg, cl_point(nxtra)) ; ijarg=ijarg+1
+
      CASE DEFAULT        ; PRINT *,' ERROR : ',TRIM(cldum),' : unknown option.' ; STOP 99
      END SELECT
   ENDDO
@@ -269,18 +299,28 @@ PROGRAM cdf_xtract_brokenline
   ENDIF
   IF ( cf_mfil == 'none') THEN ; cf_mfil = cf_tfil
   ENDIF
+  IF ( cf_sfil == 'none') THEN ; cf_sfil = cf_tfil
+  ENDIF
+  IF ( cf_sshfil == 'none') THEN ; cf_sshfil = cf_tfil
+  ENDIF
   ! check file existence
-  lchk = chkfile(cn_fhgr )
-  lchk = chkfile(cf_bath ) .OR. lchk 
-  lchk = chkfile(cn_fzgr ) .OR. lchk
-  lchk = chkfile(cf_tfil ) .OR. lchk
-  lchk = chkfile(cf_ufil ) .OR. lchk
-  lchk = chkfile(cf_vfil ) .OR. lchk
+  lchk = chkfile(cn_fhgr   )
+  lchk = chkfile(cf_bath   ) .OR. lchk 
+  lchk = chkfile(cn_fzgr   ) .OR. lchk
+  lchk = chkfile(cf_tfil   ) .OR. lchk
+  lchk = chkfile(cf_sfil   ) .OR. lchk
+  lchk = chkfile(cf_sshfil ) .OR. lchk
+  lchk = chkfile(cf_ufil   ) .OR. lchk
+  lchk = chkfile(cf_vfil   ) .OR. lchk
   IF ( lsecfile ) THEN 
      DO jsec = 1, nfiles
         lchk = chkfile(cf_lst(jsec) ) .OR. lchk
      ENDDO
   ENDIF
+  DO jf=1,nxtra
+    lchk = chkfile(cf_xtra(jf)  ) .OR. lchk
+  ENDDO
+
   IF ( lchk     ) STOP 99 ! missing files
   IF ( lg_vvl   ) THEN
      cn_fe3u = cf_ufil
@@ -319,6 +359,9 @@ PROGRAM cdf_xtract_brokenline
         ENDIF
      ENDIF
   ENDIF
+
+  ! count extra variables
+  nvar = nvar + nxtra
 
   ! nvar and nfiles are  now fixed
   ALLOCATE( stypvar(nvar), ipk(nvar), id_varout(nvar) )
@@ -383,6 +426,7 @@ PROGRAM cdf_xtract_brokenline
   ALLOCATE(rlonv(npiglo,npjglo), rlatv(npiglo,npjglo))
   ALLOCATE(rlonf(npiglo,npjglo), rlatf(npiglo,npjglo))
   ALLOCATE(temper(npiglo,npjglo), saline(npiglo,npjglo))
+  IF ( nxtra /= 0 ) ALLOCATE( vextra(npiglo,npjglo,nxtra))
   ALLOCATE(uzonal(npiglo,npjglo), vmerid(npiglo,npjglo))
   ALLOCATE(e1v(npiglo,npjglo))
   ALLOCATE(e2u(npiglo,npjglo))
@@ -422,7 +466,6 @@ PROGRAM cdf_xtract_brokenline
 
 
         ! return ending points of a leg in I J model coordinates
-        PRINT *,TRIM(csection(jsec)),' leg ',jleg
         CALL cdf_findij ( xmin, xmax, ymin, ymax, iimin, iimax, ijmin, ijmax, &
              &            cd_coord=cn_fhgr, cd_point='F', cd_verbose=cverb)
 
@@ -470,8 +513,22 @@ PROGRAM cdf_xtract_brokenline
            END DO
         ENDIF
      END DO !! loop on the legs
+     ! Check that legs are at least 2 points long 
+     
+     lchk=.FALSE.
+     DO jleg = 1, nsta(jsec) -1
+       IF ( ikeepn(jleg,jsec) < 2 ) THEN 
+          lchk=.TRUE.
+          PRINT *, 'Section ', TRIM(csection(jsec)),': Stations ',jleg,' and ',jleg+1,' are the same in the model !'
+       ENDIF
+     ENDDO
      npsecmax = MAX(npsecmax, npsec(jsec))  ! maximum number of point in any section
   END DO !! loop on the sections
+  IF ( lchk ) THEN
+       PRINT *,' Please edit your section file, and erase duplicate stations (model sense) '
+       STOP 101
+  ENDIF
+     
   IF ( lverbose)  PRINT *,' NPSECMAX = ', npsecmax
 
   ! Now can allocate the section arrays 
@@ -479,6 +536,7 @@ PROGRAM cdf_xtract_brokenline
   ALLOCATE( risec  (npsecmax,  1), rjsec  (npsecmax,1) )
   ALLOCATE( batsec   (npsecmax-1,1  ), vmasksec (npsecmax-1,npk) )
   ALLOCATE( tempersec(npsecmax-1,npk), salinesec(npsecmax-1,npk) )
+  IF (nxtra /= 0 )  ALLOCATE( vextrasec(npsecmax-1,npk,nxtra))
   ALLOCATE( uzonalsec(npsecmax-1,npk), vmeridsec(npsecmax-1,npk) )
   ALLOCATE( zvmod (npsecmax-1,1) )  ! working array
   IF ( lssh ) ALLOCATE ( sshsec (npsecmax-1,1) )
@@ -584,6 +642,14 @@ PROGRAM cdf_xtract_brokenline
      END DO
 
      ! Prepare output file ( here because rlonsec and rlatsec required )
+     DO jf = 1, nxtra
+        idum=getvdim(cf_xtra(jf), cv_xtra(jf))
+        IF (idum == 3 ) THEN 
+         npkt(jf) = npk
+        ELSE
+         npkt(jf) = 1
+        ENDIF
+     ENDDO
      CALL CreateOutputFile (jsec )
 
      ierr = putvar (ncout(jsec), id_varout(np_isec), risec(:,1),                            1,  npsec(jsec)  , 1 )
@@ -596,21 +662,36 @@ PROGRAM cdf_xtract_brokenline
   END DO  ! section for non depth dependent
 
   ! Temperature and salinity are interpolated on the respective U or V  point for better flux computation
+  zspvalt = getatt(cf_tfil, cn_votemper, cn_missing_value)
+  zspvals = getatt(cf_sfil, cn_vosaline, cn_missing_value)
+  zspvalu = getatt(cf_ufil, cn_vozocrtx, cn_missing_value)
+  zspvalv = getatt(cf_vfil, cn_vomecrty, cn_missing_value)
+  DO jf = 1, nxtra
+    zspvalxtra(jf) = getatt(cf_xtra(jf), cv_xtra(jf), cn_missing_value)
+  ENDDO
   DO jt=1, npt  ! time loop
      IF ( lg_vvl ) THEN ;  it=jt
      ELSE ;                it=1
      ENDIF
      dbarot(:) = 0.d0    ! reset barotropic transport  for all sections
-     IF ( lssh ) ssh (:,:)      = getvar(cf_tfil, cn_sossheig, 1, npiglo, npjglo, ktime = jt)
+     IF ( lssh ) ssh (:,:)      = getvar(cf_sshfil,cn_sossheig,1, npiglo, npjglo, ktime = jt)
      IF ( lmld ) rmld(:,:)      = getvar(cf_mfil, cn_somxl010, 1, npiglo, npjglo, ktime = jt)
      IF ( lice ) ricethick(:,:) = getvar(cf_ifil, cv_iicethic, 1, npiglo, npjglo, ktime = jt)
      IF ( lice ) ricefra(:,:)   = getvar(cf_ifil, cv_ileadfra, 1, npiglo, npjglo, ktime = jt)
 
      DO jk=1,npk   ! level loop , read only once the horizontal slab
         temper(:,:) = getvar(cf_tfil, cn_votemper, jk, npiglo, npjglo, ktime = jt)
-        saline(:,:) = getvar(cf_tfil, cn_vosaline, jk, npiglo, npjglo, ktime = jt)
+        WHERE(temper == zspvalt ) temper=0.
+        saline(:,:) = getvar(cf_sfil, cn_vosaline, jk, npiglo, npjglo, ktime = jt)
+        WHERE(saline == zspvals ) saline=0.
         uzonal(:,:) = getvar(cf_ufil, cn_vozocrtx, jk, npiglo, npjglo, ktime = jt)
+        WHERE(uzonal == zspvalu ) uzonal=0.
         vmerid(:,:) = getvar(cf_vfil, cn_vomecrty, jk, npiglo, npjglo, ktime = jt)
+        WHERE(vmerid == zspvalv ) vmerid=0.
+        DO jf = 1, nxtra 
+           vextra(:,:,jf) = getvar(cf_xtra(jf), cv_xtra(jf), jk, npiglo, npjglo, ktime = jt)
+           WHERE(vextra(:,:,jf) == zspvalxtra(jf) )  vextra(:,:,jf)=0.
+        ENDDO
 
         IF ( lvecrot ) THEN
            !We put the velocities in point a
@@ -673,7 +754,10 @@ PROGRAM cdf_xtract_brokenline
                  IF ( ii1 > ii ) THEN ! eastward
 
                     IF ( MIN( saline(ii+1,ij) , saline(ii+1,ij+1))  == 0. ) THEN
-                       tempersec(jipt,jk) = 0. ; salinesec(jipt,jk) = 0.
+                       tempersec(jipt,jk) = 0. ; salinesec(jipt,jk) = 0. 
+                       DO jf=1, nxtra 
+                          vextrasec(jipt,jk,jf) = 0.
+                       ENDDO
                        IF ( ll_ssh ) sshsec(jipt,jk) = 0.
                        IF ( ll_mld ) rmldsec(jipt,jk) = 0.
                        IF ( ll_ice ) ricethicksec(jipt,jk) = 0.
@@ -686,6 +770,9 @@ PROGRAM cdf_xtract_brokenline
                     ELSE
                        tempersec(jipt,jk) = 0.5 * ( temper(ii+1,ij) + temper(ii+1,ij+1) )
                        salinesec(jipt,jk) = 0.5 * ( saline(ii+1,ij) + saline(ii+1,ij+1) )
+                       DO jf=1,nxtra
+                         vextrasec(jipt,jk,jf) = 0.5 * ( vextra(ii+1,ij,jf) + vextra(ii+1,ij+1,jf) )
+                       ENDDO
                        IF ( ll_ssh ) sshsec (jipt,jk) = 0.5 * ( ssh (ii+1,ij) + ssh (ii+1,ij+1) )
                        IF ( ll_mld ) rmldsec(jipt,jk) = 0.5 * ( rmld(ii+1,ij) + rmld(ii+1,ij+1) )
                        IF ( ll_ice ) ricethicksec(jipt,jk) = 0.5 * ( ricethick(ii+1,ij) + ricethick(ii+1,ij+1) )
@@ -707,7 +794,10 @@ PROGRAM cdf_xtract_brokenline
                  ELSE ! westward
 
                     IF ( MIN( saline(ii,ij) , saline(ii,ij+1) ) == 0. ) THEN
-                       tempersec(jipt,jk) = 0. ; salinesec(jipt,jk) = 0.
+                       tempersec(jipt,jk) = 0. ; salinesec(jipt,jk) = 0. 
+                       DO jf=1, nxtra 
+                          vextrasec(jipt,jk,jf) = 0.
+                       ENDDO
                        IF ( ll_ssh ) sshsec (jipt,jk) = 0.
                        IF ( ll_mld ) rmldsec(jipt,jk) = 0.
                        IF ( ll_ice ) ricethicksec(jipt,jk) = 0.
@@ -720,6 +810,9 @@ PROGRAM cdf_xtract_brokenline
                     ELSE
                        tempersec(jipt,jk) = 0.5 * ( temper(ii,ij) + temper(ii,ij+1) )
                        salinesec(jipt,jk) = 0.5 * ( saline(ii,ij) + saline(ii,ij+1) )
+                       DO jf=1,nxtra
+                         vextrasec(jipt,jk,jf) = 0.5 * ( vextra(ii,ij,jf) + vextra(ii,ij+1,jf) )
+                       ENDDO
                        IF ( ll_ssh ) sshsec (jipt,jk) = 0.5 * ( ssh (ii,ij) + ssh (ii,ij+1) )
                        IF ( ll_mld ) rmldsec(jipt,jk) = 0.5 * ( rmld(ii,ij) + rmld(ii,ij+1) )
                        IF ( ll_ice ) ricethicksec(jipt,jk) = 0.5 * ( ricethick(ii,ij) + ricethick(ii,ij+1) )
@@ -745,6 +838,9 @@ PROGRAM cdf_xtract_brokenline
 
                     IF ( MIN( saline(ii,ij) , saline(ii+1,ij) ) == 0. ) THEN
                        tempersec(jipt,jk) = 0. ; salinesec(jipt,jk) = 0.
+                       DO jf=1, nxtra 
+                          vextrasec(jipt,jk,jf) = 0.
+                       ENDDO
                        IF ( ll_ssh ) sshsec (jipt,jk) = 0.
                        IF ( ll_mld ) rmldsec(jipt,jk) = 0.
                        IF ( ll_ice ) ricethicksec(jipt,jk) = 0.
@@ -757,6 +853,9 @@ PROGRAM cdf_xtract_brokenline
                     ELSE
                        tempersec(jipt,jk) = 0.5 * ( temper(ii,ij) + temper(ii+1,ij) )
                        salinesec(jipt,jk) = 0.5 * ( saline(ii,ij) + saline(ii+1,ij) )
+                       DO jf=1,nxtra
+                         vextrasec(jipt,jk,jf) = 0.5 * ( vextra(ii,ij,jf) + vextra(ii+1,ij,jf) )
+                       ENDDO
                        IF ( ll_ssh ) sshsec (jipt,jk) = 0.5 * ( ssh (ii,ij) + ssh (ii+1,ij) )
                        IF ( ll_mld ) rmldsec(jipt,jk) = 0.5 * ( rmld(ii,ij) + rmld(ii+1,ij) )
                        IF ( ll_ice ) ricethicksec(jipt,jk) = 0.5 * ( ricethick(ii,ij) + ricethick(ii+1,ij) )
@@ -779,6 +878,9 @@ PROGRAM cdf_xtract_brokenline
 
                     IF ( MIN( saline(ii,ij+1) , saline(ii+1,ij+1) ) == 0. ) THEN
                        tempersec(jipt,jk) = 0. ; salinesec(jipt,jk) = 0.
+                       DO jf=1, nxtra 
+                          vextrasec(jipt,jk,jf) = 0.
+                       ENDDO
                        IF ( ll_ssh ) sshsec (jipt,jk) = 0.
                        IF ( ll_mld ) rmldsec(jipt,jk) = 0.
                        IF ( ll_ice ) ricethicksec(jipt,jk) = 0.
@@ -791,6 +893,9 @@ PROGRAM cdf_xtract_brokenline
                     ELSE
                        tempersec(jipt,jk) = 0.5 * ( temper(ii,ij+1) + temper(ii+1,ij+1) )
                        salinesec(jipt,jk) = 0.5 * ( saline(ii,ij+1) + saline(ii+1,ij+1) )
+                       DO jf=1,nxtra
+                         vextrasec(jipt,jk,jf) = 0.5 * ( vextra(ii,ij+1,jf) + vextra(ii+1,ij+1,jf) )
+                       ENDDO
                        IF ( ll_ssh ) sshsec (jipt,jk) = 0.5 * ( ssh (ii,ij+1) + ssh (ii+1,ij+1) )
                        IF ( ll_mld ) rmldsec(jipt,jk) = 0.5 * ( rmld(ii,ij+1) + rmld(ii+1,ij+1) )
                        IF ( ll_ice ) ricethicksec(jipt,jk) = 0.5 * ( ricethick(ii,ij+1) + ricethick(ii+1,ij+1) )
@@ -844,6 +949,9 @@ PROGRAM cdf_xtract_brokenline
               ierr = putvar (ncout(jsec), id_varout(np_urot), urotsec(:,jk), jk, npsec(jsec)-1, 1, ktime=jt )
               ierr = putvar (ncout(jsec), id_varout(np_vrot), vrotsec(:,jk), jk, npsec(jsec)-1, 1, ktime=jt )
            ENDIF
+           DO jf = 1, nxtra
+              ierr = putvar (ncout(jsec), id_varout(np_xtra(jf)), vextrasec(:,jk,jf), jk, npsec(jsec)-1, 1, ktime=jt )
+           ENDDO
            ierr = putvar (ncout(jsec), id_varout(np_depu), rdepusec (:,jk),             jk, npsec(jsec)-1, 1 , ktime=it )  ! use it for vvl
            ierr = putvar (ncout(jsec), id_varout(np_depw), rdepwsec (:,jk),             jk, npsec(jsec)-1, 1 , ktime=it )  ! use it for vvl
 
@@ -1177,6 +1285,22 @@ CONTAINS
        ipk(ivar)                 = npk
        ivar = ivar + 1
     ENDIF
+    ! extra fields
+    DO jf=1,nxtra
+       cu_xtra(jf)  = getatt(cf_xtra(jf), cv_xtra(jf),'units','yes')
+       cln_xtra(jf) = getatt(cf_xtra(jf), cv_xtra(jf),'long_name','yes')
+       csn_xtra(jf) = getatt(cf_xtra(jf), cv_xtra(jf),'short_name','yes')
+       np_xtra(jf) = ivar 
+       stypvar(ivar)%cname       = cv_xtra(jf)
+       stypvar(ivar)%cunits      = cu_xtra(jf)
+       stypvar(ivar)%valid_min   = -100000.    ! dummy value so far
+       stypvar(ivar)%valid_max   = 100000.     !  "      "    "   "
+       stypvar(ivar)%clong_name  = TRIM(cln_xtra(jf))//' along '//TRIM(csection(ksec))//' section'
+       stypvar(ivar)%cshort_name = TRIM(csn_xtra(jf))
+       stypvar(ivar)%caxis       = 'TZX'
+       ipk(ivar)                 = npkt(jf)
+       ivar = ivar + 1
+    ENDDO
 
     ! create output fileset
     ncout(ksec) = create      (cf_out, cf_tfil, npsec(ksec),  1, npk, cdep=cn_vdeptht                    )

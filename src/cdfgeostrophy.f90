@@ -120,6 +120,9 @@ PROGRAM cdfgeostrophy
   REAL(KIND=8), DIMENSION(:,:), ALLOCATABLE :: dptot          ! total pressure at current level
 
   CHARACTER(LEN=256)                        :: cf_tfil        ! input file name
+  CHARACTER(LEN=256)                        :: cf_sfil        ! input salinity file (option)
+  CHARACTER(LEN=255)                        :: cf_sshfil      ! input SSH file (option)
+
   CHARACTER(LEN=256)                        :: cf_uout='ugeo.nc' 
   CHARACTER(LEN=256)                        :: cf_vout='vgeo.nc'
   CHARACTER(LEN=256)                        :: cldum          ! working char variable
@@ -138,7 +141,8 @@ PROGRAM cdfgeostrophy
 
   narg = iargc()
   IF ( narg == 0 ) THEN
-     PRINT *,' usage : cdfgeostrophy -f T-file [-o OUT-ufile OUT-vfile] [-nc4] [-vvl]'
+     PRINT *,' usage : cdfgeostrophy -t T-file [-s S-file] [--ssh-file SSH-file] ...'
+     PRINT *,'                   ...  [-o OUT-ufile OUT-vfile] [-nc4] [-vvl]'
      PRINT *,'      '
      PRINT *,'     PURPOSE :'
      PRINT *,'       Compute the geostrophic velocity components from the pressure gradient'
@@ -148,9 +152,13 @@ PROGRAM cdfgeostrophy
      PRINT *,'     WARNING : USE AT YOUR OWN RISKS. '
      PRINT *,'      '
      PRINT *,'     ARGUMENTS :'
-     PRINT *,'       -f T-file : netcdf file with SSH, T and S.' 
+     PRINT *,'       -t T-file : netcdf file with SSH, Temperature and Salinity.' 
+     PRINT *,'         If salinity not in T-file use -s option.'
+     PRINT *,'         If ssh not in T-file use --ssh-file option.'
      PRINT *,'      '
      PRINT *,'     OPTIONS :'
+     PRINT *,'       [-s S-file ] : Specify the salinity file if not T-file.'
+     PRINT *,'       [--ssh-file SSH-file] : specify the ssh file if not in T-file.'
      PRINT *,'       [-o OUT-ufile OUT-vfile] : Specify output files name''s  instead of '
      PRINT *,'            ',TRIM(cf_uout),' and ', TRIM(cf_vout)
      PRINT *,'       [-nc4 ]:  Use netcdf4 output with chunking and deflation level 1.'
@@ -171,23 +179,32 @@ PROGRAM cdfgeostrophy
   ENDIF
 
   ijarg=1
+  cf_sfil   = 'none'
+  cf_sshfil = 'none'
   DO WHILE (ijarg <= narg ) 
      CALL getarg(ijarg, cldum) ; ijarg=ijarg+1
      SELECT CASE ( cldum )
-     CASE ( '-f '  ) ; CALL getarg(ijarg, cf_tfil) ; ijarg=ijarg+1
+     CASE ('-t','-f'   ); CALL getarg(ijarg, cf_tfil) ; ijarg=ijarg+1
         ! option
-     CASE ( '-o '  ) ; CALL getarg(ijarg, cf_uout) ; ijarg=ijarg+1
-        ;              CALL getarg(ijarg, cf_vout) ; ijarg=ijarg+1
-     CASE ( '-nc4' ) ; lnc4   = .TRUE.
-     CASE ( '-vvl' ) ; lg_vvl = .TRUE.
-     CASE DEFAULT    ; PRINT *,' ERROR : ', TRIM(cldum), ' : unknown option.' ; STOP 99
+     CASE ( '-s '      ) ; CALL getarg(ijarg, cf_sfil) ; ijarg=ijarg+1
+     CASE ('--ssh-file') ; CALL getarg(ijarg, cf_sshfil);ijarg=ijarg+1
+     CASE ( '-o '      ) ; CALL getarg(ijarg, cf_uout) ; ijarg=ijarg+1
+        ;                  CALL getarg(ijarg, cf_vout) ; ijarg=ijarg+1
+     CASE ( '-nc4'     ) ; lnc4   = .TRUE.
+     CASE ( '-vvl'     ) ; lg_vvl = .TRUE.
+     CASE DEFAULT        ; PRINT *,' ERROR : ', TRIM(cldum), ' : unknown option.' ; STOP 99
      END SELECT
   ENDDO
 
-  lchk = chkfile(cn_fhgr)
-  lchk = chkfile(cn_fzgr) .OR. lchk
-  lchk = chkfile(cn_fmsk) .OR. lchk
-  lchk = chkfile(cf_tfil) .OR. lchk
+  IF ( cf_sfil   == 'none' ) cf_sfil   = cf_tfil
+  IF ( cf_sshfil == 'none' ) cf_sshfil = cf_tfil
+
+  lchk = chkfile(cn_fhgr  )
+  lchk = chkfile(cn_fzgr  ) .OR. lchk
+  lchk = chkfile(cn_fmsk  ) .OR. lchk
+  lchk = chkfile(cf_tfil  ) .OR. lchk
+  lchk = chkfile(cf_sfil  ) .OR. lchk
+  lchk = chkfile(cf_sshfil) .OR. lchk
   IF ( lchk ) STOP 99 ! missing file
 
   IF ( lg_vvl ) THEN
@@ -243,10 +260,10 @@ PROGRAM cdfgeostrophy
      ENDIF
 
      ! Read ssh
-     dsshn = getvar(cf_tfil, cn_sossheig, 1, npiglo, npjglo, ktime=jt)*1.d0
+     dsshn = getvar(cf_sshfil, cn_sossheig, 1, npiglo, npjglo, ktime=jt)*1.d0
      ! Read temperature and salinity
-     zt   = getvar(cf_tfil, cn_votemper, 1, npiglo, npjglo, ktime=jt)
-     zsal = getvar(cf_tfil, cn_vosaline, 1, npiglo, npjglo, ktime=jt)
+     zt    = getvar(cf_tfil, cn_votemper,   1, npiglo, npjglo, ktime=jt)
+     zsal  = getvar(cf_sfil, cn_vosaline,   1, npiglo, npjglo, ktime=jt)
      ! Compute density at first level
      dsigsurf(:,:) = 1000.d0 + sigmai ( zt,zsal,deptht(1),npiglo,npjglo )
      ! Compute psurf (pressure due to SSH)
@@ -270,7 +287,7 @@ PROGRAM cdfgeostrophy
         ! 
         ! Read temperature and salinity at current level
         zt   = getvar(cf_tfil, cn_votemper, jk, npiglo, npjglo, ktime=jt)
-        zsal = getvar(cf_tfil, cn_vosaline, jk, npiglo, npjglo, ktime=jt)
+        zsal = getvar(cf_sfil, cn_vosaline, jk, npiglo, npjglo, ktime=jt)
         ! Compute density of this level
         dsiglevel(:,:) = 1000.d0 + sigmai ( zt,zsal,deptht(jk),npiglo,npjglo )
         ! Compute the pressure at T-point 
